@@ -1,0 +1,52 @@
+On application start: Prompt admin for the app_password
+	[app_key, app_salt] = argon2(app_password, global_salt, 10 seconds, 512 bits) --split into two 256-bit blocks for app_key and app_salt
+
+	global_salt is a randomly-generated static constant which is stored in... the application code? Must be consistent between runs of the application.
+	
+
+-- assumes account name, credit_card_token, last_access_date, active and email are not sensitive
+-- if client takes on full responsibility of account_key, then the account_key column will be null
+CREATE TABLE accounts(
+	id char(36) primary key,  -- SecureRandom.uuid
+	name varchar not null, 
+	user_count varchar(64) not null,  -- aes256-cbc(app_key, user_count) (random, always changing IV)
+	email varchar null, 
+	credit_card_token varchar(100) null, 
+	account_key varchar(64) null,				-- x = SecureRandom.random_bytes(32); account_key = aes256-ecb(app_key, x); return x to client to store
+	account_key_hash varchar(100) not null,		-- sha256(account_key [provided by client])
+	old_account_key varchar(64) null,			-- only non-null if in the middle of a migration
+	old_account_key_hash varchar(100) null,		-- only non-null if in the middle of a migration
+	pass_salt varchar(64) not null,				-- aes256-ecb(account_key [provided by client], SecureRandom.random_bytes(32))
+	created_date datetime not null default current_timestamp,
+	last_access_date datetime not null default current_timestamp,
+	active bit not null default(1)
+);
+
+CREATE TABLE account_histories(
+	id integer primary,
+	account_id char(36) not null, 
+	name varchar not null, 
+	email varchar null, 
+	credit_card_token varchar(100) null, 
+	account_key_hash varchar(100) not null,
+	pass_salt varchar(64) not null,
+	active bit not null default(1),
+	action char(1) not null,			-- C, U (for Create, Update)
+	audit_time datetime not null default current_timestamp
+);
+
+-- should the username global_salt be the same global_salt or a different global_salt?
+-- do not store the salt for the user (the hashing must be consistent since it is the key of this table), but store the salt for the password
+CREATE TABLE user_passwords(
+	username varchar(100) primary key, 	-- argon2(username, global_salt, key_data: app_salt || account_key [provided by client], 50 ms, 256 bits) 
+	password varchar(100) not null		-- argon2(password, SecureRandom.random_bytes(16), key_data: app_salt || pass_salt [decrypted] || username, 100 ms, 256 bits) 
+);
+
+CREATE TABLE user_password_histories(
+	id integer primary key,
+	username varchar(100) not null, 
+	password varchar(100) not null, 
+	action char(1) not null, 		-- C, U, D (for Create, Update, Delete)
+	audit_time datetime not null default current_timestamp
+);
+
